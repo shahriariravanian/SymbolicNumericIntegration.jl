@@ -37,6 +37,7 @@ Keyword Arguments:
 - `opt` (default: `STLSQ(exp.(-10:1:0))`): the sparse regression optimizer (from DataDrivenSparse)
 - `homotopy` (default: `true`): use the homotopy algorithm to generate the basis (*deprecated*, will be removed in a future version)
 - `use_optim` (default: `false`): use Optim.jl `minimize` function instead of the STLSQ algorithm (*experimental*)
+- `mixer` (default: `false`): use the mixer algorithm for ansatz generation (*experimental*)
 
 Output:
 -------
@@ -48,7 +49,7 @@ function integrate(eq, x = nothing; abstol = 1e-6, num_steps = 2, num_trials = 1
                    radius = 1.0,
                    show_basis = false, opt = STLSQ(exp.(-10:1:0)), bypass = false,
                    symbolic = true, max_basis = 100, verbose = false, complex_plane = true,
-                   homotopy = true, use_optim = false)
+                   homotopy = true, use_optim = false, mixer=false)
     eq = expand(eq)
 
     if x == nothing
@@ -70,7 +71,7 @@ function integrate(eq, x = nothing; abstol = 1e-6, num_steps = 2, num_trials = 1
 
     s, u, ϵ = integrate_sum(eq, x, l; bypass, abstol, num_trials, num_steps,
                             radius, show_basis, opt, symbolic,
-                            max_basis, verbose, complex_plane, use_optim)
+                            max_basis, verbose, complex_plane, use_optim, mixer)
     # return simplify(s), u, ϵ
     return s, u, ϵ
 end
@@ -153,10 +154,10 @@ The output is the same as `integrate`
 function integrate_term(eq, x, l; kwargs...)
     args = Dict(kwargs)
     abstol, num_steps, num_trials, show_basis, symbolic, verbose, max_basis,
-    radius = args[:abstol], args[:num_steps],
+    radius, mixer = args[:abstol], args[:num_steps],
              args[:num_trials], args[:show_basis], args[:symbolic],
-             args[:verbose],
-             args[:max_basis], args[:radius]
+             args[:verbose], args[:max_basis], args[:radius],
+             args[:mixer]
 
     attempt(l, "Integrating term", eq)
 
@@ -164,6 +165,10 @@ function integrate_term(eq, x, l; kwargs...)
         y = eq * x
         result(l, "Successful", y)
         return y, 0, 0
+    end
+    
+    if mixer
+    	return solve_mixer(eq, x; kwargs...)
     end
 
     eq = cache(eq)

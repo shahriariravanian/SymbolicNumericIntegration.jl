@@ -18,6 +18,7 @@ include("roots.jl")
 include("rules.jl")
 include("candidates.jl")
 include("homotopy.jl")
+include("ansatz.jl")
 
 export Ei, Si, Ci, Li
 
