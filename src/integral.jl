@@ -38,6 +38,7 @@ Keyword Arguments:
 - `homotopy` (default: `true`): use the homotopy algorithm to generate the basis (*deprecated*, will be removed in a future version)
 - `use_optim` (default: `false`): use Optim.jl `minimize` function instead of the STLSQ algorithm (*experimental*)
 - `mixer` (default: `false`): use the mixer algorithm for ansatz generation (*experimental*)
+- `depth`
 
 Output:
 -------
@@ -49,7 +50,7 @@ function integrate(eq, x = nothing; abstol = 1e-6, num_steps = 2, num_trials = 1
                    radius = 1.0,
                    show_basis = false, opt = STLSQ(exp.(-10:1:0)), bypass = false,
                    symbolic = true, max_basis = 100, verbose = false, complex_plane = true,
-                   homotopy = true, use_optim = false, mixer=false)
+                   homotopy = true, use_optim = false, mixer=false, depth=100)
     eq = expand(eq)
 
     if x == nothing
@@ -71,7 +72,7 @@ function integrate(eq, x = nothing; abstol = 1e-6, num_steps = 2, num_trials = 1
 
     s, u, ϵ = integrate_sum(eq, x, l; bypass, abstol, num_trials, num_steps,
                             radius, show_basis, opt, symbolic,
-                            max_basis, verbose, complex_plane, use_optim, mixer)
+                            max_basis, verbose, complex_plane, use_optim, mixer, depth)
     # return simplify(s), u, ϵ
     return s, u, ϵ
 end

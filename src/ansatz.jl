@@ -1,4 +1,3 @@
-
 function split_terms(S, x) 	
 	S = unique([x; [equivalent(t, x) for t in terms(S) if isdependent(t,x)]])
 	p = sortperm(complexity.(S))
@@ -6,12 +5,31 @@ function split_terms(S, x)
 end
 
 function split_terms(S, x, ω) 	
+	D = Dict()
 	c = collect_powers(S, ω)
-    S = sum(sum.(split_terms.(values(c), x)))
-	S = unique([x; [equivalent(t, x) for t in terms(S) if isdependent(t,x)]])
+
+	for (k, y) in c
+		ts = split_terms(y, x)
+		for t in ts			
+			for r in terms(expand(t))
+				if haskey(D, r)
+					push!(D[r], k)
+				else
+					D[r] = [k]
+				end
+			end
+		end
+	end
+	
+	# S = sum(sum.(split_terms.(values(c), x)))
+	# S = unique([x; [equivalent(t, x) for t in terms(S) if isdependent(t,x)]])	
+	S = collect(keys(D))
+	K = collect(values(D))
 	p = sortperm(complexity.(S))
-	return S[p]
+	return S[p], K[p]
 end
+
+@syms z
 
 function generate_mixer(eq, x)
     eq = eq isa Num ? eq.val : eq
@@ -19,21 +37,35 @@ function generate_mixer(eq, x)
 
     p = transform(eq, x)
  	q, sub, ks = rename_factors(p, (si => Si, ci => Ci, ei => Ei, li => Li))
-    S = 1 
+ 	
+ 	if sum(ks) > 8	# number of ansatz is exponential in sum(ks)
+ 		return [x, eq], [[0], [0]]
+ 	end
+ 	
+    S = 1
     R = 0
     D = Differential(x)
 
-    for i in 1:length(ks)
+    for i in 1:length(ks)    	
         μ = u[i]
         λ = sub[μ]
         Iμ, dμ = apply_partial_int_rules(λ, x)
         U = substitute(Iμ, sub)
-        dU = expand_derivatives(D(λ)) / dμ
-        q = (U + λ*ω + dU*ω^2)        
-    	S = expand(S * q^ks[i] * (1 + 1/dμ))	        	
+        dU = expand_derivatives(D(λ)) / dμ    
+
+		k = ks[i]
+        R = expand((U/ω + λ + dU*ω) ^ k)
+        # R = sum(U^p * dU^q * λ^r * ω^(q-p) for p=0:k for q=0:k for r=0:k if p+q+r==k)
+        
+        if isdependent(dμ, x)
+	        R = sum(t + t/dμ for t in terms(R))
+	    end
+	    
+        S = expand(S * R)
     end    
     
-    return split_terms(S, x, ω)
+    S, K = split_terms(S, x, ω)        
+    return S, K
 end
 
 
@@ -165,10 +197,11 @@ function sparse_fit(A, opt; abstol = 1e-6)
 end
 
 final_result(q, basis) = sum(q[i] * expr(basis[i]) for i in 1:length(basis) if q[i] != 0; init = 0)
+final_basis(q, basis) = [expr(basis[i]) for i in 1:length(basis) if q[i] != 0]
 
 #############################################################################
 
-function try_basis(eq, x, basis; abstol=1e-6, opt=STLSQ(exp.(-10:1:0)), complex_plane=true, radius=1.0) 
+function try_basis(eq, x, basis, K=nothing; abstol=1e-6, opt=STLSQ(exp.(-10:1:0)), complex_plane=true, radius=1.0) 
 	A, X = init_basis_matrix(eq, x, basis, radius, complex_plane; abstol) 			
 	l = find_independent_subset(A; abstol)
     A, basis = A[l, l], basis[l]
@@ -176,6 +209,13 @@ function try_basis(eq, x, basis; abstol=1e-6, opt=STLSQ(exp.(-10:1:0)), complex_
 	q, ϵ = sparse_fit(A, opt)	
 	
 	if ϵ < abstol
+		if K != nothing
+			for i in 1:length(q)
+				if q[i] != 0
+					println(basis[i], " --> ", K[i])
+				end
+			end
+		end
 		return final_result(q, basis), ϵ
 	else
 		return nothing, ϵ
@@ -219,41 +259,50 @@ end
 
 function solve_mixer(eq, x; kwargs...)    
 	args = Dict(kwargs)
-    abstol, opt, complex_plane, radius = args[:abstol], args[:opt], 
-    									 args[:complex_plane], args[:radius]
+    abstol, opt, complex_plane, radius, num_trials, num_steps = 
+    									 args[:abstol], args[:opt], 
+    									 args[:complex_plane], args[:radius],
+    									 args[:num_trials], args[:num_steps]
 
-	S = generate_mixer(eq, x)	
+	S, K = generate_mixer(eq, x)
+	S = cache.(S)
+	sp = .!is_special.(expr.(S))	
+
+	# y, ϵ = try_basis(eq, x, S[sp], K[sp])	
 	
-	S0 = filter_special_functions(S)
-	
-	y, ϵ = try_basis(eq, x, S0)	
-	
-	if ϵ < abstol 	
-		return y, 0, ϵ
+	for i = 1:num_trials	
+		y, ϵ = try_basis(eq, x, S[sp], K[sp])
+		if ϵ < abstol 	
+			printstyled("S0\n"; color=:red)		
+			return y, 0, ϵ
+		end
 	end		
 	
-	y, ϵ = try_basis(eq, x, S)	
-	
-	if ϵ < abstol 	
-		return y, 0, ϵ
-	end
-	
-	s = sum(S)
-	S = split_terms((1+x)*(s + ω*expand_derivatives(Differential(x)(s))), x, ω)
-	
-	y, ϵ = try_basis(eq, x, S)	
-	
-	if ϵ < abstol 	
-		return y, 0, ϵ
-	end
+	for i = 1:num_trials	
+		y, ϵ = try_basis(eq, x, S, K)
+		if ϵ < abstol 	
+			printstyled("Sp\n"; color=:red)
+			return y, 0, ϵ
+		end
+	end	
 
+	for j = 2:num_steps	
+		s = sum(expr.(S))
+		S, K = split_terms((1+x)*(s + ω*expand_derivatives(Differential(x)(s))), x, ω)		
+
+		for i = 1:num_trials	
+			y, ϵ = try_basis(eq, x, S)
+			if ϵ < abstol 	
+				printstyled("S+\n"; color=:red)
+				return y, 0, ϵ
+			end
+		end
+	end
 	
 	return 0, eq, Inf		
 end
 
 ########################################################################
-
-is_sym(x) = first(ops(x)) isa Sym
 
 sp_rules = [@rule +(~~xs) => sum(~~xs)
            @rule *(~~xs) => sum(~~xs)
@@ -275,9 +324,42 @@ end
 
 function filter_special_functions(S, contain=false)
 	if contain
-		return filter(x -> is_special(x), S)
+		return filter(x -> is_special(expr(x)), S)
 	else
-		return filter(x -> !is_special(x), S)
+		return filter(x -> !is_special(expr(x)), S)
 	end
+end
+
+############################################################################
+
+function distribute(::Div, eq)
+    a = arguments(eq)[1]
+    b = arguments(eq)[2]
+    return sum(terms(a) ./ b)
+end
+
+function distribute(::Add, eq)
+    return sum(distribute.(terms(eq)))
+end
+
+distribute(::Any, eq) = eq
+
+distribute(eq) = distribute(ops(expand(eq))...)
+
+##############################################################################
+
+has_log_rules = [
+	@rule +(~~xs) => sum(~~xs)
+	@rule *(~~xs) => sum(~~xs)
+	@rule ~x / ~y => ~x + ~y
+	@rule ~x - ~y => ~x + ~y
+	@rule log(~x) => ω
+	@rule (~f)(~x) => 0
+]
+
+function has_log(eq) 
+	eq = last(ops(eq))
+	w = Prewalk(PassThrough(Chain(has_log_rules)))(eq)
+	return any(x -> isequal(x, ω), get_variables(w))
 end
 

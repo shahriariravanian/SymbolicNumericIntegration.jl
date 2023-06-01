@@ -276,5 +276,11 @@ h_rules = [@rule +(~~xs) => ω + sum(~~xs)
 function complexity(eq)
     _, eq = ops(eq)
     h = Prewalk(PassThrough(Chain(h_rules)))(eq)
-    return substitute(h, Dict(ω => 1))
+    return abs(substitute(h, Dict(ω => 1)))
+    c = collect_powers(h, ω)    
+    if haskey(c, 1)
+    	return abs(c[1])
+    else
+   		return 0 
+    end
 end

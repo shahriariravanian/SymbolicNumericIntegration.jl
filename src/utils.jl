@@ -139,10 +139,13 @@ end
 
 iscomplex(x) = x isa Complex
 
-count_rule1 = @rule ^(pox(~k, ~n1), ~n2) => isequal(~k, 1) ? pox(1, ~n1 * ~n2) :
-                                            pox(^(~k, ~n2), ~n1 * ~n2)
-count_rule2 = @rule pox(~k1, ~n1) * pox(~k2, ~n2) => pox(~k1 * ~k2, ~n1 + ~n2)
-count_rule3 = @acrule pox(~k, ~n) * ~u::is_not_pox => pox(~k * ~u, ~n)
+count_rules = [
+	@rule ^(pox(~k, ~n1), ~n2) => isequal(~k, 1) ? pox(1, ~n1 * ~n2) : pox(^(~k, ~n2), ~n1 * ~n2)
+	@rule pox(~k1, ~n1) * pox(~k2, ~n2) => pox(~k1 * ~k2, ~n1 + ~n2)
+	@acrule pox(~k, ~n) * ~u::is_not_pox => pox(~k * ~u, ~n)
+	@rule pox(~k1, ~n1) / pox(~k2, ~n2)  => pox(~k1 / ~k2, ~n1 - ~n2)
+	@rule ~u::is_not_pox / pox(~k, ~n) => pox(~u / ~k, -~n)
+	]
 
 """
     collect_powers separates the powers of x in eq (a polynomial) and returns
@@ -151,8 +154,7 @@ count_rule3 = @acrule pox(~k, ~n) * ~u::is_not_pox => pox(~k * ~u, ~n)
 function collect_powers(eq, x)
     eq = expand(expand_derivatives(eq))
     eq = replace_x(eq, x)
-    #eq = Prewalk(PassThrough(count_rule1))(eq)
-    eq = Fixpoint(Prewalk(PassThrough(Chain([count_rule1, count_rule2, count_rule3]))))(eq)
+    eq = Fixpoint(Prewalk(PassThrough(Chain(count_rules))))(eq)
 
     if !istree(eq)
         return Dict{Any, Any}(0 => eq)
