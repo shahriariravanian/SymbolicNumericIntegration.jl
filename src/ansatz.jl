@@ -32,6 +32,7 @@ end
 @syms z
 
 function generate_mixer(eq, x)
+    return generate_recursive(eq, x)
     eq = eq isa Num ? eq.val : eq
     x = x isa Num ? x.val : x
 
@@ -361,5 +362,228 @@ function has_log(eq)
 	eq = last(ops(eq))
 	w = Prewalk(PassThrough(Chain(has_log_rules)))(eq)
 	return any(x -> isequal(x, ω), get_variables(w))
+end
+
+#################################################################################
+
+function generate_recursive(eq, x, depth=2)
+    eq = eq isa Num ? eq.val : eq
+    x = x isa Num ? x.val : x
+
+    S = recursive_ansatz(eq, x, depth)
+    K = ones(Int, length(S))
+    return S, K      
+end
+
+function recursive_ansatz(eq, x, depth)
+println("eq = \t", eq)
+    if depth == 0
+        return [eq]
+    end
+
+    λ, k, res = head(eq, x)
+   	sub = Dict(si => Si, ci => Ci, ei => Ei, li => Li)
+    
+    S = 0
+    D = Differential(x)
+   
+    Iμ, dμ = apply_partial_int_rules(λ, x)
+    U = substitute(Iμ, sub)
+    dU = expand_derivatives(D(λ)) / dμ    
+
+println("λ = \t", λ)
+
+    for p=0:k 
+        for q=0:k
+            if p+q <= k
+                a = U^p * dU^q
+                if isdependent(dμ, x)                    
+                    b = eq / λ^(p+q) * dμ^(q-p)
+                else
+                    b = eq / λ^(p+q)
+                end
+println("a = \t", a)
+println("b = \t", b)
+                S += expand(a * b)
+                if isdependent(b, x)
+                    R = expand(expand_derivatives(D(b)))
+                    for r in terms(R)
+                        r = equivalent(r, x)
+println("r = \t", r)
+                        B = recursive_ansatz(r, x, depth-1)
+println("B = \t", B)
+                        S += expand(sum(a .* B))
+                    end
+                end                    
+            end        
+        end
+    end
+    
+    S, _ = split_terms(S, x, ω)       
+ 
+    return S	
+end
+
+###################################################################
+
+head(eq, x) = head(ops(eq)..., x)
+
+function head(::Add, eq, x)
+    @warn "head of an Add"
+    args = arguments(eq)
+
+    for (i,t) in enumerate(args)
+        if isdependent(t, x)
+            h, k, r = head(t, x)
+            return h, k, r + sum(args[j] for j=1:length(args) if j != i; init=0) / h
+        end
+    end
+
+    return 1, 1, 1
+end
+
+function head(::Mul, eq, x)
+    args = arguments(eq)
+
+    for (i,t) in enumerate(args)
+        if isdependent(t, x)
+            h, k, r = head(t, x)
+            return h, k, r * prod(args[j] for j=1:length(args) if j != i; init=1)
+        end
+    end
+
+    return 1, 1, 1    
+end
+
+function head(::Div, eq, x)
+    a = arguments(eq)[1]
+    b = arguments(eq)[2]
+    
+    if isdependent(a, x)
+        h, k, r = head(a, x)
+        return h, k, r / b
+    elseif isdependent(b, x)
+        h, k, r = head(b, x)
+        return h, -k, a / r
+    else
+        return 1, 1, 1
+    end
+end
+
+function head(::Pow, eq, x)
+    if !isdependent(eq, x)
+        return 1, 1, 1
+    end
+    y, k = arguments(eq)
+    if is_number(k)
+        r = nice_parameter(k)
+        if r isa Integer || r isa Rational
+            if denominator(r) == 1
+                return y, r, 1
+            else
+                return y^(1/denominator(r)), numerator(r), 1
+            end
+        end
+    end
+    return eq, 1, 1
+end
+
+function head(::Any, eq, x)
+    return eq, 1, 1
+end
+
+##########################################################################
+
+mutable struct Basis
+    S::Array{ExprCache}
+    A::Matrix{Complex{Float64}}
+    X::Vector{Complex{Float64}}
+    Y::Vector{Complex{Float64}}
+    eq::ExprCache 
+end
+
+basis(b::Basis) = b.basis
+
+function copy!(dst::Basis, src::Basis)
+    @assert isequal(dst.eq, src.eq)
+    dst.A = src.A
+    dst.X = src.X
+    dst.Y = src.Y
+    dst.S = src.S
+end
+
+function create_basis(eq, x, n=20; radius=1.0) 
+    X = zeros(Complex{Float64}, n)
+    Y = zeros(Complex{Float64}, n)
+    A = ones(Complex{Float64}, (n,1))
+    
+    eq = cache(eq)
+    fn = fun!(eq, x)
+
+    for k = 1:n        
+        X[k] = test_point(true, radius)
+        Y[k] = fn(X[k])    
+    end 
+
+    return Basis([eq], A, X, Y, eq)
+end
+
+function append_basis!(b::Basis, x, L; abstol=1e-6)
+    l = length(L)
+    resize_basis!(b, x, l)
+    n, m = size(b.A)
+    L = cache.(L)    
+
+    C = zeros(Complex{Float64}, (n, m+l))
+    C[:,1:m] .= b.A
+
+    gn = deriv_fun!.(L, x)
+
+    for j = 1:l
+        C[:, m+j] .= gn[j].(b.X) ./ b.Y
+    end
+       
+    # remove bad rows
+    rows = vec(is_proper.(sum(C; dims=2)))    
+    C = C[rows, :]
+     
+    # remove linearly-dependent columns
+    S = vcat(b.S, L)
+   	cols = find_independent_subset(C; abstol)
+    S, C = S[cols], C[:, cols]
+    
+    b.S = S
+    b.A = C
+
+    return b
+end
+
+function resize_basis!(b::Basis, x, k=0; abstol=1e-6, radius=1.0)
+    n, m = size(b.A)
+
+    if n < m+k
+        bb = create_basis(b.eq, x, 2*(m+k); radius)
+        append_basis!(bb, x, b.S[2:end]; abstol)
+        copy!(b, bb)
+    end    
+end
+
+function filter_integrand!(b::Basis, x, L; abstol=1e-6)
+    l = length(L)
+    resize_basis!(b, x, l)
+    n, m = size(b.A)
+    
+    C = zeros(Complex{Float64}, (n, m+l))
+    C[:,1:m] .= b.A
+
+    gn = fun!.(cache.(L), x)    # note, fun! instead of deriv_fun! here
+
+    for j = 1:l
+        C[:, m+j] .= gn[j].(b.X) ./ b.Y
+    end    
+     
+    # remove linearly-dependent integrands
+    cols = find_independent_subset(C; abstol)
+    return L[cols[m+1:end]]
 end
 
