@@ -1,7 +1,8 @@
 function split_terms(S, x) 	
-	S = unique([x; [equivalent(t, x) for t in terms(S) if isdependent(t,x)]])
-	p = sortperm(complexity.(S))
-	return S[p]
+	S = unique([equivalent(t, x) for t in terms(S) if isdependent(t,x)])    
+    return isempty(S) ? [1] : S	
+    # p = sortperm(complexity.(S))
+	# return S[p]
 end
 
 function split_terms(S, x, ω) 	
@@ -32,7 +33,7 @@ end
 @syms z
 
 function generate_mixer(eq, x)
-    return generate_recursive(eq, x)
+    # return generate_recursive(eq, x)
     eq = eq isa Num ? eq.val : eq
     x = x isa Num ? x.val : x
 
@@ -366,62 +367,90 @@ end
 
 #################################################################################
 
-function generate_recursive(eq, x, depth=2)
+function generate_recursive(eq, x, depth=8)
     eq = eq isa Num ? eq.val : eq
     x = x isa Num ? x.val : x
 
     S = recursive_ansatz(eq, x, depth)
     K = ones(Int, length(S))
+    println(length(S))
     return S, K      
 end
 
-function recursive_ansatz(eq, x, depth)
-println("eq = \t", eq)
-    if depth == 0
-        return [eq]
-    end
-
+function fragments(eq, x)
     λ, k, res = head(eq, x)
    	sub = Dict(si => Si, ci => Ci, ei => Ei, li => Li)
-    
-    S = 0
-    D = Differential(x)
-   
+    D = Differential(x)   
     Iμ, dμ = apply_partial_int_rules(λ, x)
     U = substitute(Iμ, sub)
     dU = expand_derivatives(D(λ)) / dμ    
 
-println("λ = \t", λ)
-
+    F = []
+    
     for p=0:k 
         for q=0:k
-            if p+q <= k
-                a = U^p * dU^q
-                if isdependent(dμ, x)                    
-                    b = eq / λ^(p+q) * dμ^(q-p)
-                else
-                    b = eq / λ^(p+q)
-                end
-println("a = \t", a)
-println("b = \t", b)
-                S += expand(a * b)
-                if isdependent(b, x)
-                    R = expand(expand_derivatives(D(b)))
-                    for r in terms(R)
-                        r = equivalent(r, x)
-println("r = \t", r)
-                        B = recursive_ansatz(r, x, depth-1)
-println("B = \t", B)
-                        S += expand(sum(a .* B))
+            for r=0:k
+                if p+q+r <= k
+                    a = expand(U^p * dU^q * λ^r)
+                    if isdependent(dμ, x)                    
+                        b = res * dμ^(q-p)
+                    else
+                        b = res
                     end
-                end                    
-            end        
+                    for t in split_terms(a, x)
+                        push!(F, (t, b))
+                    end
+                end
+            end
         end
     end
+
+    return unique(F)
+end
+
+function recursive_ansatz(eq, x, depth=2)
+    θ = create_basis(eq, x)
+    traverse_ansatz!(θ, eq, x, 1, depth)
+    return θ.S
+end
+
+function traverse_ansatz!(θ, eq, x, coef, depth)
+println(eq, '\t', coef)
+    if depth == 0
+        return
+    end
+
+    D = Differential(x)
+    F = fragments(eq, x)
     
-    S, _ = split_terms(S, x, ω)       
- 
-    return S	
+    S = sum(expand(a*b*coef) for (a,b) in F)
+    L = split_terms(S, x)
+    append_basis!(θ, x, L)    
+println("L = \t", L)
+    R = []
+    
+    for (a, b) in F
+        if isdependent(b, x)            
+            for r in split_terms(expand(expand_derivatives(D(b))), x)
+                push!(R, (a, r))                                                
+            end
+        end
+    end
+
+    R = unique(R)
+println("R = \t", R)
+    # cols = filter_integrand!(θ, x, last.(R))    
+    
+    # for (a, r) in R[cols]
+    #     traverse_ansatz!(θ, r, x, coef, depth-1)        
+    # end
+
+    cols = filter_integrand!(θ, x, first.(R) .* last.(R))
+       
+    for (a, r) in R[cols]
+        traverse_ansatz!(θ, r, x, a, depth-1)
+        # traverse_ansatz!(θ, r*a, x, coef, depth-1)        
+    end       	
 end
 
 ###################################################################
@@ -502,7 +531,7 @@ mutable struct Basis
     eq::ExprCache 
 end
 
-basis(b::Basis) = b.basis
+basis(θ::Basis) = θ.basis
 
 function copy!(dst::Basis, src::Basis)
     @assert isequal(dst.eq, src.eq)
@@ -528,19 +557,19 @@ function create_basis(eq, x, n=20; radius=1.0)
     return Basis([eq], A, X, Y, eq)
 end
 
-function append_basis!(b::Basis, x, L; abstol=1e-6)
+function append_basis!(θ::Basis, x, L; abstol=1e-6)
     l = length(L)
-    resize_basis!(b, x, l)
-    n, m = size(b.A)
+    resize_basis!(θ, x, l)
+    n, m = size(θ.A)
     L = cache.(L)    
 
     C = zeros(Complex{Float64}, (n, m+l))
-    C[:,1:m] .= b.A
+    C[:,1:m] .= θ.A
 
     gn = deriv_fun!.(L, x)
 
     for j = 1:l
-        C[:, m+j] .= gn[j].(b.X) ./ b.Y
+        C[:, m+j] .= gn[j].(θ.X) ./ θ.Y
     end
        
     # remove bad rows
@@ -548,42 +577,40 @@ function append_basis!(b::Basis, x, L; abstol=1e-6)
     C = C[rows, :]
      
     # remove linearly-dependent columns
-    S = vcat(b.S, L)
+    S = vcat(θ.S, L)
    	cols = find_independent_subset(C; abstol)
     S, C = S[cols], C[:, cols]
     
-    b.S = S
-    b.A = C
-
-    return b
+    θ.S = S
+    θ.A = C
 end
 
-function resize_basis!(b::Basis, x, k=0; abstol=1e-6, radius=1.0)
-    n, m = size(b.A)
+function resize_basis!(θ::Basis, x, k=0; abstol=1e-6, radius=1.0)
+    n, m = size(θ.A)
 
     if n < m+k
-        bb = create_basis(b.eq, x, 2*(m+k); radius)
-        append_basis!(bb, x, b.S[2:end]; abstol)
-        copy!(b, bb)
+        θ2 = create_basis(θ.eq, x, 2*(m+k); radius)
+        append_basis!(θ2, x, θ.S[2:end]; abstol)
+        copy!(θ, θ2)
     end    
 end
 
-function filter_integrand!(b::Basis, x, L; abstol=1e-6)
+function filter_integrand!(θ::Basis, x, L; abstol=1e-6)
     l = length(L)
-    resize_basis!(b, x, l)
-    n, m = size(b.A)
+    resize_basis!(θ, x, l)
+    n, m = size(θ.A)
     
     C = zeros(Complex{Float64}, (n, m+l))
-    C[:,1:m] .= b.A
+    C[:,1:m] .= θ.A
 
     gn = fun!.(cache.(L), x)    # note, fun! instead of deriv_fun! here
 
     for j = 1:l
-        C[:, m+j] .= gn[j].(b.X) ./ b.Y
+        C[:, m+j] .= gn[j].(θ.X) ./ θ.Y
     end    
      
     # remove linearly-dependent integrands
     cols = find_independent_subset(C; abstol)
-    return L[cols[m+1:end]]
+    return cols[m+1:end]
 end
 

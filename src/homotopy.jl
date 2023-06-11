@@ -105,8 +105,8 @@ end
 
 partial_int_rules = [
                      # trigonometric functions
-                     @rule 𝛷(sin(~x)) => (cos(~x) + si(~x), ~x)                     
-                     # @rule 𝛷(sin(~x)) => (cos(~x), ~x)                     
+                     #@rule 𝛷(sin(~x)) => (cos(~x) + si(~x), ~x)                     
+                     @rule 𝛷(sin(~x)) => (cos(~x), ~x)                     
                      @rule 𝛷(cos(~x)) => (sin(~x) + ci(~x), ~x)
                      @rule 𝛷(tan(~x)) => (1 + log(cos(~x)), ~x)
                      @rule 𝛷(csc(~x)) => (1 + log(csc(~x) + cot(~x)) + log(sin(~x)), ~x)
