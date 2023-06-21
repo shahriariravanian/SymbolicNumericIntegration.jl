@@ -264,23 +264,7 @@ inverse(eq) = Prewalk(PassThrough(Chain(inv_rules)))(Ω(value(eq)))
 
 is_sym(x) = first(ops(x)) isa Sym
 
-h_rules = [@rule +(~~xs) => ω + sum(~~xs)
-           @rule *(~~xs) => ω + sum(~~xs)
-           @rule ~x / ~y => ω + ~x + ~y
-           @rule ^(~x, ~y) => ω + ~x + ~y
-           @rule (~f)(~x) => ω + ~x
-           @rule ~x::is_sym => ω]
-
 # complexity returns a measure of the complexity of an equation
-# it is roughly similar ro kolmogorov complexity
-function complexity(eq)
-    _, eq = ops(eq)
-    h = Prewalk(PassThrough(Chain(h_rules)))(eq)
-    return abs(substitute(h, Dict(ω => 1)))
-    c = collect_powers(h, ω)    
-    if haskey(c, 1)
-    	return abs(c[1])
-    else
-   		return 0 
-    end
-end
+# it is roughly similar to kolmogorov complexity
+complexity(eq) = length(string(eq))
+

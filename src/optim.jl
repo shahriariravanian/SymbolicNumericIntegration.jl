@@ -11,7 +11,7 @@ function solve_optim(eq, x, basis, radius; kwargs...)
 
     l = find_independent_subset(A; abstol)
     A, basis, n = A[:, l], basis[l], sum(l)
-    p = rank_basis(A, basis)
+    p = rank_basis(A)
 
     qm = zeros(n)
     ϵm = 1e6
@@ -45,7 +45,7 @@ function reconstruct(q, basis)
 end
 
 # returns a vector of indices of basis elems from the most important to the least
-function rank_basis(A, basis)
+function rank_basis(A)
     n, m = size(A)
     q = A \ ones(n)
     w = [abs(q[i]) * norm(A[:, i]) for i in 1:m]
