@@ -3,8 +3,8 @@ strip_num(x) = x isa Num ? x.val : x
 function split_terms(S, x) 	
 	S = unique([equivalent(t, x) for t in terms(S) if isdependent(t,x)])    
     return isempty(S) ? [1] : S	
-    p = sortperm(complexity.(S))
-	return S[p]
+    # p = sortperm(complexity.(S))
+	# return S[p]
 end
 
 function split_terms(S, x, ω) 	
@@ -53,7 +53,7 @@ function generate_mixer(eq, x)
 		k = ks[i]		
         R = expand((U/ω + λ + dU*ω) ^ k)        
         # R = substitute(R, Dict(ω => dμ))
-        # R = sum(U^p * dU^q * λ^r * ω^(q-p) for p=0:k for q=0:k for r=0:k if p+q+r==k)
+        # R = sum(expand(U^p * dU^q * λ^r * ω^(q-p)) for p=0:k for q=0:k for r=0:k if p+q+r==k)
         
         if isdependent(dμ, x)
 	        R = sum(t + t/dμ for t in terms(R))
@@ -62,7 +62,62 @@ function generate_mixer(eq, x)
         S = expand(S * R)
     end    
     
+    S = substitute(S, sub)
+    
     return split_terms(S, x, ω)
+end
+
+function generate_mixer_ex(eq, x)
+    eq, x = strip_num(eq), strip_num(x) 
+	    
+	S = 1
+	F = create_artifacts(eq, x)	
+	
+	@syms α β
+	
+	for (μ, k, U, dU, dμ, ρ) in F
+		R = expand((μ + α/ω + β*ω) ^ k)		
+		R = substitute(R, Dict(α => U, β => dU))
+
+		if isdependent(dμ, x)
+	    	R = sum(t + t/dμ for t in terms(R))
+	    end
+	    
+	    S = expand(S * R)
+	end	
+    
+    return split_terms(S, x, ω)
+end
+
+function create_artifacts(eq, x)
+    eq, x = strip_num(eq), strip_num(x) 
+
+	if istree(eq) && operation(eq) == +
+		return union([create_artifacts(t, x) for t in terms(eq)]...)
+	end
+
+    p = transform(eq, x)
+ 	q, sub, ks = rename_factors(p, (si => Si, ci => Ci, ei => Ei, li => Li))
+ 	
+    D = Differential(x)
+    
+    F = []
+
+    for i in 1:length(ks)    	
+        μ = u[i]
+   		k = ks[i]		
+   		
+        λ = sub[μ]
+        Iμ, dμ = apply_partial_int_rules(λ, x)
+        U = substitute(Iμ, sub)
+        ρ = substitute(q/μ^k, sub)
+        dU = expand_derivatives(D(λ)) / dμ    
+
+        # f = expand(Iμ/ω + λ + dU*ω)        
+	    push!(F, (λ, k, U, dU, dμ, ρ))	    
+    end    
+    
+    return F
 end
 
 function expand_ansatz_basis(S, x)
@@ -346,4 +401,31 @@ final_result(q, basis) = sum(q[i] * expr(basis[i]) for i in 1:length(basis) if q
 final_basis(q, basis) = [expr(basis[i]) for i in 1:length(basis) if q[i] != 0]
 final_result(q, θ::Basis) = final_result(q, expr.(θ.S))
 
+
+############################################################################
+
+using Combinatorics
+
+mutable struct AnsatzFactor
+	eq
+	k::Int
+	eqs::Array{ExprCache}
+	dz::ExprCache
+	X::Array{Float64}
+	Y::Array{Float64}
+	dY::Array{Float64}
+	dZ::Array{Float64}
+	ks
+end
+
+function create_ansatz_factor(eq, k, x, sub)
+    D = Differential(x)    
+	Iu, dz = apply_partial_int_rules(eq, x)
+    U = substitute(Iu, sub)
+    dU = expand_derivatives(D(eq)) / dz
+    
+	q = vcat(split_terms(eq), split_terms(U), split_terms(dU))
+
+    return q
+end
 
