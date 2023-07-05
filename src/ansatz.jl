@@ -407,25 +407,72 @@ final_result(q, θ::Basis) = final_result(q, expr.(θ.S))
 using Combinatorics
 
 mutable struct AnsatzFactor
-	eq
-	k::Int
-	eqs::Array{ExprCache}
-	dz::ExprCache
-	X::Array{Float64}
-	Y::Array{Float64}
-	dY::Array{Float64}
-	dZ::Array{Float64}
-	ks
+    eq::ExprCache
+    k::Int                      # the power of eq
+	eqs::Array{ExprCache}       # the list of artifacts
+	z::ExprCache                # z = y', the derivative of the inner function  
+	powers                      # the combinatorial powers of the artifacts
 end
 
-function create_ansatz_factor(eq, k, x, sub)
+function create_ansatz_factor(eq, x, sub)
     D = Differential(x)    
-	Iu, dz = apply_partial_int_rules(eq, x)
+	Iu, z = apply_partial_int_rules(eq, x)
     U = substitute(Iu, sub)
-    dU = expand_derivatives(D(eq)) / dz
+    dU = expand_derivatives(D(eq)) / z
     
-	q = vcat(split_terms(eq), split_terms(U), split_terms(dU))
+	f = split_terms(eq + U/ω + dU*ω, x, ω)
 
-    return q
+    return f, z
 end
 
+function create_ansatz(eq, x)
+    eq = strip_num(eq)
+    x = strip_num(x)
+
+    p = transform(eq, x)
+    q, sub, ks = rename_factors(p, (si => Si, ci => Ci, ei => Ei, li => Li))
+
+    F = []
+
+    for i in 1:length(ks)
+        k = ks[i]    	
+        μ = u[i]
+        λ = sub[μ]
+        f, z = create_ansatz_factor(λ, x, sub)
+        # powers = collect(multiexponents(length(f), k))
+        l = length(f)
+        powers = [[i==j ? 1 : 0 for j=1:l] for i=1:l]
+
+        anz = AnsatzFactor(
+            cache(λ),
+            k, 
+            cache.(f),
+            cache(z),
+            powers 
+        )
+        push!(F, anz)
+    end
+
+    return F
+end
+
+function list_ansatz(anz::AnsatzFactor)
+    n = length(anz.eqs)
+    B = []
+    for p in anz.powers
+        eq = prod(expr(anz.eqs[i])^p[i] for i=1:n; init=expr(anz.eq)^(anz.k-1))
+        push!(B, eq)
+    end
+
+    return B
+end
+
+function tensorprod(ts...)
+    if length(ts) == 1
+        return ts[1]
+    elseif length(ts) == 2
+        return [ts[1][i]*ts[2][j] for i=1:length(ts[1]) for j=1:length(ts[2])]
+    else
+        return tensorprod(ts[1], tensorprod(ts[2:end]...))
+    end
+end
